@@ -15,7 +15,13 @@ pub mod radio;
 pub use radio::Radio;
 use radio::*;
 
+#[cfg(feature="eu868")]
+mod eu868;
+#[cfg(feature="eu868")]
+use eu868::Configuration as RegionalConfiguration;
+#[cfg(feature="us915")]
 mod us915;
+#[cfg(feature="us915")]
 use us915::Configuration as RegionalConfiguration;
 
 type DevNonce = lorawan_encoding::parser::DevNonce<[u8; 2]>;

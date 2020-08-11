@@ -9,7 +9,7 @@ extern crate panic_halt;
 
 use core::fmt::Write;
 use lorawan_device::{Device as LoRaWanDevice, Event as LoRaWanEvent, Response as LoRaWanResponse};
-use rtfm::app;
+use rtic::app;
 use stm32l0xx_hal::exti::{ExtiLine, GpioLine};
 use stm32l0xx_hal::{pac, pac::Interrupt, rng, serial};
 //use stm32l0xx_hal::serial::USART1 as DebugUsart;
@@ -187,7 +187,7 @@ const APP: () = {
                 ctx.resources.timer_context.count = 0;
                 ctx.resources.timer_context.enable = true;
                 // trigger timer so that it can set itself up
-                rtfm::pend(Interrupt::TIM2);
+                rtic::pend(Interrupt::TIM2);
             }
             LoRaWanResponse::Error => {
                 write!(ctx.resources.debug_uart, "LoRaWanResponse::Error!!\r\n").unwrap();

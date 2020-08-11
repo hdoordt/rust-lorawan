@@ -1,5 +1,6 @@
 #![cfg_attr(not(test), no_std)]
 #![no_main]
+#![no_std]
 
 // To use example, press any key in serial terminal
 // Packet will send and "Transmit Done!" will print when radio is done sending packet
@@ -9,19 +10,20 @@ extern crate panic_halt;
 
 use core::fmt::Write;
 use lorawan_device::{Device as LoRaWanDevice, Event as LoRaWanEvent, Response as LoRaWanResponse};
-use rtfm::app;
+use rtic::app;
+use stm32f1xx_hal::device::USART1 as DebugUsart;
 use stm32f1xx_hal::{pac, pac::Interrupt, serial};
-use stm32f1xx_hal::prelude::*;
-use stm32f1xx_hal::{rcc, timer::Timer};
+use stm32f1xx_hal::{prelude::*, rcc, timer::Timer};
 use sx12xx;
 use sx12xx::Sx12xx;
 mod bindings;
-// pub use bindings::initialize_irq as initialize_radio_irq;
+pub use bindings::initialize_irq as initialize_radio_irq;
 pub use bindings::RadioIRQ;
 pub use bindings::TcxoEn;
 
+static mut RNG: Option<()> = todo!("init rng");
 fn get_random_u32() -> u32 {
-    // TODO
+    todo!()
 }
 
 pub struct TimerContext {
@@ -33,10 +35,10 @@ pub struct TimerContext {
 #[app(device = stm32f1xx_hal::pac, peripherals = true)]
 const APP: () = {
     struct Resources {
-        // int: Exti,
+        int: Exti,
         radio_irq: RadioIRQ,
-        // debug_uart: serial::Tx<DebugUsart>,
-        // uart_rx: serial::Rx<DebugUsart>,
+        debug_uart: serial::Tx<DebugUsart>,
+        uart_rx: serial::Rx<DebugUsart>,
         timer: Timer<pac::TIM2>,
         #[init([0;512])]
         buffer: [u8; 512],
@@ -55,24 +57,31 @@ const APP: () = {
     #[init(spawn = [send_ping, lorawan_event], resources = [buffer])]
     fn init(ctx: init::Context) -> init::LateResources {
         let device = ctx.device;
-        
-        
+
         let mut rcc = device.RCC.constrain();
         let mut flash = device.FLASH.constrain();
         let mut afio = device.AFIO.constrain(&mut rcc.apb2);
 
         let clocks = rcc.cfgr.freeze(&mut flash.acr);
 
+        let mut gpioa = device.GPIOA.split(&mut rcc.apb2);
+        let mut gpiob = device.GPIOB.split(&mut rcc.apb2);
+        let mut gpioc = device.GPIOB.split(&mut rcc.apb2);
 
-        let gpioa = device.GPIOA.split(&mut rcc.apb2);
-        let gpiob = device.GPIOB.split(&mut rcc.apb2);
-        let gpioc = device.GPIOC.split(&mut rcc.apb2);
+        let usart2_rx = gpioa.pa2.into_alternate_push_pull(&mut gpioa.crl);
+        let usart2_tx = gpioa.pa3.into_floating_input(&mut gpioa.crl);
+        let serial_pins = (usart2_rx, usart2_tx);
 
-        let (tx_pin, rx_pin, serial_peripheral) = (gpioa.pa2, gpioa.pa3, device.USART2);
+        let usart2_config = stm32f1xx_hal::serial::Config::default();
 
-        let mut serial = serial_peripheral
-            .usart(tx_pin, rx_pin, serial::Config::default(), &mut rcc)
-            .unwrap();
+        let mut serial = stm32f1xx_hal::serial::Serial::usart2(
+            device.USART2,
+            serial_pins,
+            &mut afio.mapr,
+            usart2_config,
+            clocks,
+            &mut rcc.apb1,
+        );
 
         // listen for incoming bytes which will trigger transmits
         serial.listen(serial::Event::Rxne);
@@ -80,14 +89,13 @@ const APP: () = {
 
         write!(tx, "LongFi Device Test\r\n").unwrap();
 
-        // let mut exti = Exti::new(device.EXTI);
+        let mut exti = todo!();
 
         // constructor initializes 48 MHz clock that RNG requires
         // Initialize 48 MHz clock and RNG
-        // TODO: init RNG
-
-        // TODO set up EXTI on DIO0 PIN (pa5)
-        let radio_irq = gpioa.pa4.into_push_pull_input();
+        
+        unsafe { RNG = Some(todo!()) };
+        let radio_irq = initialize_radio_irq(gpiob.pb4, &mut syscfg, &mut exti);
 
         // Configure the timer.
         let timer = device.TIM2.timer(1.khz(), &mut rcc);
@@ -125,7 +133,7 @@ const APP: () = {
 
         // Return the initialised resources.
         init::LateResources {
-            // int: exti,
+            int: exti,
             radio_irq,
             debug_uart: tx,
             uart_rx: rx,
@@ -135,30 +143,28 @@ const APP: () = {
         }
     }
 
-    // #[task(capacity = 4, priority = 2, resources = [debug_uart, buffer, sx12xx, lorawan], spawn  = [lorawan_response])]
-    #[task(capacity = 4, priority = 2, resources = [buffer, sx12xx, lorawan], spawn  = [lorawan_response])]
+    #[task(capacity = 4, priority = 2, resources = [debug_uart, buffer, sx12xx, lorawan], spawn  = [lorawan_response])]
     fn radio_event(ctx: radio_event::Context, event: sx12xx::Event) {
         let (sx12xx, lorawan) = (ctx.resources.sx12xx, ctx.resources.lorawan);
-        // let debug = ctx.resources.debug_uart;
-        // match event {
-        //     sx12xx::Event::Sx12xxEvent_DIO0 => write!(debug, "DIO0 \r\n").unwrap(),
-        //     _ => write!(debug, "Unexpected!\r\n").unwrap(),
-        // }
+        let debug = ctx.resources.debug_uart;
+        match event {
+            sx12xx::Event::Sx12xxEvent_DIO0 => write!(debug, "DIO0 \r\n").unwrap(),
+            _ => write!(debug, "Unexpected!\r\n").unwrap(),
+        }
 
         if let Some(response) = lorawan.handle_radio_event(sx12xx, event) {
             ctx.spawn.lorawan_response(response).unwrap();
         }
     }
 
-    // #[task(capacity = 4, priority = 2, resources = [debug_uart, buffer, sx12xx, lorawan], spawn  = [lorawan_response])]
-    #[task(capacity = 4, priority = 2, resources = [buffer, sx12xx, lorawan], spawn  = [lorawan_response])]
+    #[task(capacity = 4, priority = 2, resources = [debug_uart, buffer, sx12xx, lorawan], spawn  = [lorawan_response])]
     fn lorawan_event(ctx: lorawan_event::Context, event: LoRaWanEvent) {
         let (sx12xx, lorawan) = (ctx.resources.sx12xx, ctx.resources.lorawan);
-        // let debug = ctx.resources.debug_uart;
+        let debug = ctx.resources.debug_uart;
 
         match event {
             LoRaWanEvent::TimerFired => {
-                // write!(debug, "Providing Timer Event!\r\n").unwrap();
+                write!(debug, "Providing Timer Event!\r\n").unwrap();
             }
             _ => (),
         }
@@ -168,31 +174,29 @@ const APP: () = {
         }
     }
 
-    // #[task(capacity = 4, priority = 2, resources = [debug_uart, timer_context])]
-    #[task(capacity = 4, priority = 2, resources = [timer_context])]
+    #[task(capacity = 4, priority = 2, resources = [debug_uart, timer_context])]
     fn lorawan_response(ctx: lorawan_response::Context, response: LoRaWanResponse) {
         match response {
             LoRaWanResponse::TimerRequest(ms) => {
-                // write!(ctx.resources.debug_uart, "Arming Timer {:} ms \r\n", ms).unwrap();
+                write!(ctx.resources.debug_uart, "Arming Timer {:} ms \r\n", ms).unwrap();
                 // grab a lock on timer and arm a timeout
                 ctx.resources.timer_context.target = ms as u16;
                 ctx.resources.timer_context.count = 0;
                 ctx.resources.timer_context.enable = true;
                 // trigger timer so that it can set itself up
-                rtfm::pend(Interrupt::TIM2);
+                rtic::pend(Interrupt::TIM2);
             }
             LoRaWanResponse::Error => {
-                // write!(ctx.resources.debug_uart, "LoRaWanResponse::Error!!\r\n").unwrap();
+                write!(ctx.resources.debug_uart, "LoRaWanResponse::Error!!\r\n").unwrap();
             }
         }
     }
 
-    // #[task(capacity = 4, priority = 2, resources = [debug_uart, count, sx12xx, lorawan])]
-    #[task(capacity = 4, priority = 2, resources = [count, sx12xx, lorawan])]
+    #[task(capacity = 4, priority = 2, resources = [debug_uart, count, sx12xx, lorawan])]
     fn send_ping(ctx: send_ping::Context) {
         let (sx12xx, lorawan) = (ctx.resources.sx12xx, ctx.resources.lorawan);
-        // let debug = ctx.resources.debug_uart;
-        // write!(debug, "Sending Ping\r\n").unwrap();
+        let debug = ctx.resources.debug_uart;
+        write!(debug, "Sending Ping\r\n").unwrap();
 
         let data: [u8; 5] = [0xDE, 0xAD, 0xBE, 0xEF, *ctx.resources.count];
         *ctx.resources.count += 1;
@@ -200,20 +204,20 @@ const APP: () = {
         lorawan.send(sx12xx, &data, 1, false);
     }
 
-    // #[task(binds = USART2, priority=1, resources = [uart_rx], spawn = [send_ping])]
-    // fn USART2(ctx: USART2::Context) {
-    //     // #[task(binds = USART1, priority=1, resources = [uart_rx], spawn = [send_ping])]
-    //     // fn USART1(ctx: USART1::Context) {
-    //     let rx = ctx.resources.uart_rx;
-    //     rx.read().unwrap();
-    //     ctx.spawn.send_ping().unwrap();
-    // }
+    #[task(binds = USART2, priority=1, resources = [uart_rx], spawn = [send_ping])]
+    fn USART2(ctx: USART2::Context) {
+        // #[task(binds = USART1, priority=1, resources = [uart_rx], spawn = [send_ping])]
+        // fn USART1(ctx: USART1::Context) {
+        let rx = ctx.resources.uart_rx;
+        rx.read().unwrap();
+        ctx.spawn.send_ping().unwrap();
+    }
 
-    // #[task(binds = EXTI4_15, priority = 1, resources = [radio_irq, int], spawn = [radio_event])]
-    #[task(binds = EXTI4_15, priority = 1, resources = [radio_irq], spawn = [radio_event])]
+    /// This task runs on rising edge of DIO0 IRQ line,
+    #[task(binds = EXTI4_15, priority = 1, resources = [radio_irq, int], spawn = [radio_event])]
     fn EXTI4_15(ctx: EXTI4_15::Context) {
-        // Exti::unpend(GpioLine::from_raw_line(ctx.resources.radio_irq.pin_number()).unwrap());
-        // TODO: unpend EXTI interrupt
+        todo!("unpend interrupt");
+
         ctx.spawn
             .radio_event(sx12xx::Event::Sx12xxEvent_DIO0)
             .unwrap();

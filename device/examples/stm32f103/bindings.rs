@@ -1,10 +1,10 @@
-use hal::exti;
-use hal::exti::{ExtiLine, GpioLine};
 use hal::gpio::*;
 use hal::pac;
 use hal::prelude::*;
 use hal::rcc::Rcc;
-use hal::spi;
+use embedded_hal::digital::v2::{InputPin, OutputPin};
+use hal::spi::{Mode as SpiMode, Phase, Polarity, Spi};
+
 
 use nb::block;
 use stm32f1xx_hal as hal;
@@ -14,54 +14,53 @@ type Uninitialized = Analog;
 
 pub type RadioIRQ = gpiob::PB4<Input<PullUp>>;
 
-// pub fn initialize_irq(
-//     pin: gpiob::PB4<Uninitialized>,
-//     syscfg: &mut hal::syscfg::SYSCFG,
-//     exti: &mut exti::Exti,
-// ) -> gpiob::PB4<Input<PullUp>> {
-//     let dio0 = pin.into_pull_up_input();
-
-//     exti.listen_gpio(
-//         syscfg,
-//         dio0.port(),
-//         GpioLine::from_raw_line(dio0.pin_number()).unwrap(),
-//         exti::TriggerEdge::Rising,
-//     );
-
-//     dio0
-// }
+pub fn initialize_irq() {
+    todo!("Configure interrupt on dio0_pin's rising edge");
+}
 
 pub type TcxoEn = gpioa::PA8<Output<PushPull>>;
 
 pub fn new(
     spi_peripheral: pac::SPI1,
     rcc: &mut Rcc,
-    spi_sck: gpiob::PB3<Uninitialized>,
+    spi_sck: gpioa::PA5<Uninitialized>,
     spi_miso: gpioa::PA6<Uninitialized>,
     spi_mosi: gpioa::PA7<Uninitialized>,
-    spi_nss_pin: gpioa::PA15<Uninitialized>,
-    reset: gpioc::PC0<Uninitialized>,
+    spi_nss_pin: gpiob::PB1<Uninitialized>,
+    reset: gpiob::PB1<Uninitialized>,
     rx: gpioa::PA1<Uninitialized>,
-    tx_rfo: gpioc::PC2<Uninitialized>,
-    tx_boost: gpioc::PC1<Uninitialized>,
+    tx_rfo: gpioc::PC2<Uninitialized>, // TODO: find out which pins these should be
+    tx_boost: gpioc::PC1<Uninitialized>, // And what their function is
     tcxo_en_pin: Option<gpioa::PA8<Uninitialized>>,
+    gpioa_crl: &mut gpioa::CRL,
+    gpiob_crl: &mut gpiob::CRL,
+    gpiob_crh: &mut gpiob::CRH,
+    mapr: &mut hal::afio::MAPR,
+    clocks: hal::rcc::Clocks,
 ) -> BoardBindings {
     let mut set_board_tcxo = None;
+
+    let spi_pins = (
+        spi_sck,  // D13
+        spi_miso, // D12
+        spi_mosi, // D11
+    );
+
+    let spi_mode = SpiMode {
+        polarity: Polarity::IdleLow,
+        phase: Phase::CaptureOnFirstTransition,
+    };
+
     // store all of the necessary pins and peripherals into statics
     // this is necessary as the extern C functions need access
     // this is safe, thanks to ownership and because these statics are private
     unsafe {
-        let x= spi_peripheral.spi();
-        SPI = Some(spi_peripheral.spi(
-            (spi_sck, spi_miso, spi_mosi),
-            spi::MODE_0,
-            200_000.hz(),
-            rcc,
-        ));
-        SPI_NSS = Some(spi_nss_pin.into_push_pull_output());
-        RESET = Some(reset.into_push_pull_output());
+        let spi1 = Spi::spi1(spi_peripheral, spi_pins, mapr, spi_mode, 100.khz(), clocks, &mut rcc.apb2);
+        SPI = Some(spi1);
+        SPI_NSS = Some(spi_nss_pin.into_push_pull_output(gpiob_crh));
+        RESET = Some(reset.into_push_pull_output(gpiob_crl));
         ANT_SW = Some(AntennaSwitches::new(
-            rx.into_push_pull_output(),
+            rx.into_push_pull_output(gpioa_crl),
             tx_rfo.into_push_pull_output(),
             tx_boost.into_push_pull_output(),
         ));
@@ -99,15 +98,15 @@ pub extern "C" fn set_tcxo(value: bool) -> u8 {
     6
 }
 
-type SpiPort = hal::spi::Spi<
-    hal::pac::SPI1,
-    (
-        hal::gpio::gpiob::PB3<Uninitialized>,
-        hal::gpio::gpioa::PA6<Uninitialized>,
-        hal::gpio::gpioa::PA7<Uninitialized>,
-    ),
->;
-static mut SPI: Option<SpiPort> = None;
+// type SpiPort = hal::spi::Spi<
+//     hal::pac::SPI1,
+//     (
+//         hal::gpio::gpiob::PB3<Uninitialized>,
+//         hal::gpio::gpioa::PA6<Uninitialized>,
+//         hal::gpio::gpioa::PA7<Uninitialized>,
+//     ),
+// >;
+static mut SPI: Option<x> = None;
 #[no_mangle]
 extern "C" fn spi_in_out(out_data: u8) -> u8 {
     unsafe {
@@ -120,7 +119,7 @@ extern "C" fn spi_in_out(out_data: u8) -> u8 {
     }
 }
 
-static mut SPI_NSS: Option<gpioa::PA15<Output<PushPull>>> = None;
+static mut SPI_NSS: Option<gpiob::PB1<Output<PushPull>>> = None;
 #[no_mangle]
 extern "C" fn spi_nss(value: bool) {
     unsafe {
@@ -134,7 +133,7 @@ extern "C" fn spi_nss(value: bool) {
     }
 }
 
-static mut RESET: Option<gpioc::PC0<Output<PushPull>>> = None;
+static mut RESET: Option<gpiob::PB1<Output<PushPull>>> = None;
 #[no_mangle]
 extern "C" fn radio_reset(value: bool) {
     unsafe {
@@ -193,9 +192,9 @@ where
 }
 
 type AntSw = AntennaSwitches<
-    stm32l0xx_hal::gpio::gpioa::PA1<stm32l0xx_hal::gpio::Output<stm32l0xx_hal::gpio::PushPull>>,
-    stm32l0xx_hal::gpio::gpioc::PC2<stm32l0xx_hal::gpio::Output<stm32l0xx_hal::gpio::PushPull>>,
-    stm32l0xx_hal::gpio::gpioc::PC1<stm32l0xx_hal::gpio::Output<stm32l0xx_hal::gpio::PushPull>>,
+    stm32f1xx_hal::gpio::gpioa::PA1<stm32f1xx_hal::gpio::Output<stm32f1xx_hal::gpio::PushPull>>,
+    stm32f1xx_hal::gpio::gpioc::PC2<stm32f1xx_hal::gpio::Output<stm32f1xx_hal::gpio::PushPull>>,
+    stm32f1xx_hal::gpio::gpioc::PC1<stm32f1xx_hal::gpio::Output<stm32f1xx_hal::gpio::PushPull>>,
 >;
 
 static mut ANT_SW: Option<AntSw> = None;

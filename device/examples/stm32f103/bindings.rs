@@ -11,10 +11,18 @@ use sx12xx::{AntPinsMode, BoardBindings};
 
 type Uninitialized = Input<Floating>;
 
-pub type RadioIRQ = gpiob::PB4<Input<PullUp>>;
+pub type RadioIRQ = gpioa::PA3<Input<Floating>>;
 
-pub fn initialize_irq() {
-    todo!("Configure interrupt on dio0_pin's rising edge (EXTI15_10)");
+pub fn initialize_irq(dio0_pin: RadioIRQ, gpioa_crl: &mut gpioa::CRL, afio: &mut hal::afio::Parts, exti: &pac::EXTI) -> RadioIRQ {
+    let mut dio0_pin = dio0_pin.into_floating_input(gpioa_crl);
+    dio0_pin.make_interrupt_source(afio);
+    dio0_pin.trigger_on_edge(exti, Edge::RISING);
+    dio0_pin.enable_interrupt(exti);
+
+    unsafe {
+        pac::NVIC::unmask(pac::Interrupt::EXTI3);
+    }
+    dio0_pin
 }
 
 pub type TcxoEn = gpioa::PA8<Output<PushPull>>;

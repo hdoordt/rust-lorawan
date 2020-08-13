@@ -6,7 +6,7 @@
 
 
 use core::fmt::Write;
-use hal::device::USART2 as DebugUsart;
+use hal::device::USART1 as DebugUsart;
 use hal::{pac, pac::Interrupt, serial};
 use hal::{
     prelude::*,
@@ -45,6 +45,7 @@ const APP: () = {
         #[init(0)]
         count: u8,
         sx12xx: Sx12xx,
+        radio_irq: bindings::RadioIRQ,
         lorawan: LoRaWanDevice<Sx12xx, sx12xx::Event>,
         #[init(TimerContext {
             target: 0,
@@ -67,19 +68,19 @@ const APP: () = {
         let mut gpioa = device.GPIOA.split(&mut rcc.apb2);
         let mut gpiob = device.GPIOB.split(&mut rcc.apb2);
 
-        let usart2_rx = gpioa.pa2.into_alternate_push_pull(&mut gpioa.crl);
-        let usart2_tx = gpioa.pa3.into_floating_input(&mut gpioa.crl);
-        let serial_pins = (usart2_rx, usart2_tx);
+        let usart1_rx = gpioa.pa9.into_alternate_push_pull(&mut gpioa.crh);
+        let usart1_tx = gpioa.pa10.into_floating_input(&mut gpioa.crh);
+        let serial_pins = (usart1_rx, usart1_tx);
 
-        let usart2_config = hal::serial::Config::default();
+        let usart1_config = hal::serial::Config::default();
 
-        let mut serial = hal::serial::Serial::usart2(
-            device.USART2,
+        let mut serial = hal::serial::Serial::usart1(
+            device.USART1,
             serial_pins,
             &mut afio.mapr,
-            usart2_config,
+            usart1_config,
             clocks,
-            &mut rcc.apb1,
+            &mut rcc.apb2,
         );
 
         // listen for incoming bytes which will trigger transmits
@@ -92,6 +93,7 @@ const APP: () = {
         // Initialize 48 MHz clock and RNG
 
         // unsafe { RNG = Some(todo!("Init RNG")) };
+        let radio_irq = initialize_radio_irq(gpioa.pa3, &mut gpioa.crl, &mut afio, &device.EXTI);
 
         // Configure the timer.
         let timer = Timer::tim2(device.TIM2, &clocks, &mut rcc.apb1).start_count_down(100.khz());
@@ -134,6 +136,7 @@ const APP: () = {
             sx12xx,
             lorawan,
             timer,
+            radio_irq,
         }
     }
 
@@ -208,13 +211,19 @@ const APP: () = {
     }
 
     /// This task runs on rising edge of DIO0 IRQ line,
-    #[task(binds = EXTI15_10, priority = 1, spawn = [radio_event])]
-    fn EXTI15_10(ctx: EXTI15_10::Context) {
-        todo!("unpend interrupt");
+    #[task(binds = EXTI3, priority = 1, resources = [radio_irq], spawn = [radio_event])]
+    fn EXTI3(ctx: EXTI3::Context) {
+        use stm32f1xx_hal::gpio::ExtiPin;
+        let radio_irq = ctx.resources.radio_irq;
 
-        ctx.spawn
-            .radio_event(sx12xx::Event::Sx12xxEvent_DIO0)
-            .unwrap();
+        if radio_irq.check_interrupt() {
+            radio_irq.clear_interrupt_pending_bit();
+
+            ctx.spawn
+                .radio_event(sx12xx::Event::Sx12xxEvent_DIO0)
+                .unwrap();
+        }
+
     }
 
     // This is a pretty not scalable timeout implementation

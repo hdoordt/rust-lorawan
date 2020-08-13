@@ -1,11 +1,9 @@
 #![allow(dead_code)]
 
-//TODO: Specify UPLINK_CHANNEL_MAP
 const UPLINK_CHANNEL_MAP: [u32; 6] = [
     864_100_00, 864_300_00, 864_500_00, 868_100_00, 868_300_00, 868_500_00,
 ];
 
-//TODO: Specify DOWNLINK_CHANNEL_MAP
 const DOWNLINK_CHANNEL_MAP: [u32; 3] = [868_100_00, 868_300_00, 868_500_00];
 
 const RECEIVE_DELAY1: usize = 1;

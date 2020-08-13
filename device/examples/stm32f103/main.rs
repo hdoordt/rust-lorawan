@@ -4,28 +4,37 @@
 // To use example, press any key in serial terminal
 // Packet will send and "Transmit Done!" will print when radio is done sending packet
 
+use panic_halt as _;
 
 use core::fmt::Write;
 use hal::device::USART1 as DebugUsart;
-use hal::{pac, pac::Interrupt, serial};
 use hal::{
+    adc::{Adc, SampleTime},
+    gpio::*,
     prelude::*,
     timer::{CountDownTimer, Timer},
 };
+use hal::{pac, pac::Interrupt, serial};
 use lorawan_device::{Device as LoRaWanDevice, Event as LoRaWanEvent, Response as LoRaWanResponse};
 use rtic::app;
 use stm32f1xx_hal as hal;
 use sx12xx;
 use sx12xx::Sx12xx;
+
 mod bindings;
+mod rng;
 pub use bindings::initialize_irq as initialize_radio_irq;
 pub use bindings::RadioIRQ;
 pub use bindings::TcxoEn;
+use rng::Rng;
 
-//TODO: determine RNG type
-static mut RNG: Option<()> = None;
+static mut RNG: Option<Rng> = None;
 fn get_random_u32() -> u32 {
-    todo!()
+    unsafe { &mut RNG }
+        .iter_mut()
+        .map(|rng| rng.rand_u32())
+        .next()
+        .unwrap_or(0)
 }
 
 pub struct TimerContext {
@@ -57,13 +66,23 @@ const APP: () = {
 
     #[init(spawn = [send_ping, lorawan_event], resources = [buffer])]
     fn init(ctx: init::Context) -> init::LateResources {
-        let device = ctx.device;
+        let mut device = ctx.device;
 
         let mut rcc = device.RCC.constrain();
         let mut flash = device.FLASH.constrain();
         let mut afio = device.AFIO.constrain(&mut rcc.apb2);
+        let mut bkp = rcc
+            .bkp
+            .constrain(device.BKP, &mut rcc.apb1, &mut device.PWR);
+        let crc = device.CRC.new(&mut rcc.ahb);
 
-        let clocks = rcc.cfgr.freeze(&mut flash.acr);
+        let clocks = rcc
+            .cfgr
+            .use_hse(8.mhz())
+            .sysclk(56.mhz())
+            .pclk1(28.mhz())
+            .adcclk(14.mhz())
+            .freeze(&mut flash.acr);
 
         let mut gpioa = device.GPIOA.split(&mut rcc.apb2);
         let mut gpiob = device.GPIOB.split(&mut rcc.apb2);
@@ -72,9 +91,9 @@ const APP: () = {
         let usart1_tx = gpioa.pa10.into_floating_input(&mut gpioa.crh);
         let serial_pins = (usart1_rx, usart1_tx);
 
-        let usart1_config = hal::serial::Config::default();
+        let usart1_config = serial::Config::default();
 
-        let mut serial = hal::serial::Serial::usart1(
+        let mut serial = serial::Serial::usart1(
             device.USART1,
             serial_pins,
             &mut afio.mapr,
@@ -91,8 +110,11 @@ const APP: () = {
 
         // constructor initializes 48 MHz clock that RNG requires
         // Initialize 48 MHz clock and RNG
-
-        // unsafe { RNG = Some(todo!("Init RNG")) };
+        let adc_in_pin = gpioa.pa1.into_analog(&mut gpioa.crl);
+        let mut adc = Adc::adc1(device.ADC1, &mut rcc.apb2, clocks);
+        adc.set_sample_time(SampleTime::T_1);
+        let rtc = hal::rtc::Rtc::rtc(device.RTC, &mut bkp);
+        unsafe { RNG = Some(Rng::new(rtc, adc, adc_in_pin, crc)) };
         let radio_irq = initialize_radio_irq(gpioa.pa3, &mut gpioa.crl, &mut afio, &device.EXTI);
 
         // Configure the timer.
@@ -223,7 +245,6 @@ const APP: () = {
                 .radio_event(sx12xx::Event::Sx12xxEvent_DIO0)
                 .unwrap();
         }
-
     }
 
     // This is a pretty not scalable timeout implementation
@@ -264,6 +285,6 @@ const APP: () = {
 
     // Interrupt handlers used to dispatch software tasks
     extern "C" {
-        fn USART3(); // TODO: verify that this should indeed be USAR
+        fn USART3(); // TODO: verify that this should indeed be USART3
     }
 };

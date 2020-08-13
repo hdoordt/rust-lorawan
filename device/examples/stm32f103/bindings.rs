@@ -7,7 +7,7 @@ use hal::spi::{Mode as SpiMode, Phase, Polarity, Spi, Spi1NoRemap};
 
 use nb::block;
 use stm32f1xx_hal as hal;
-use sx12xx::{AntPinsMode, BoardBindings};
+use sx12xx::BoardBindings;
 
 type Uninitialized = Input<Floating>;
 
@@ -73,7 +73,7 @@ pub fn new(
         spi_in_out: Some(spi_in_out),
         spi_nss: Some(spi_nss),
         delay_ms: Some(delay_ms),
-        set_antenna_pins: Some(set_antenna_pins),
+        set_antenna_pins: None,
         set_board_tcxo: None,
         busy_pin_status: None,
         reduce_power: None,
@@ -151,6 +151,3 @@ extern "C" fn delay_ms(ms: u32) {
     cortex_m::asm::delay(ms);
 }
 
-pub extern "C" fn set_antenna_pins(mode: AntPinsMode, _power: u8) {
-    // TODO: Do we need this declaration if there are no antenna pins?
-}

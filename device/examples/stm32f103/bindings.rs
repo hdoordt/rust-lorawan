@@ -1,10 +1,9 @@
+use embedded_hal::digital::v2::OutputPin;
 use hal::gpio::*;
 use hal::pac;
 use hal::prelude::*;
 use hal::rcc::Rcc;
-use embedded_hal::digital::v2::{InputPin, OutputPin};
-use hal::spi::{Mode as SpiMode, Phase, Polarity, Spi};
-
+use hal::spi::{Mode as SpiMode, Phase, Polarity, Spi, Spi1NoRemap};
 
 use nb::block;
 use stm32f1xx_hal as hal;
@@ -28,22 +27,16 @@ pub fn new(
     spi_mosi: gpioa::PA7<Uninitialized>,
     spi_nss_pin: gpiob::PB1<Uninitialized>,
     reset: gpiob::PB1<Uninitialized>,
-    rx: gpioa::PA1<Uninitialized>,
-    tx_rfo: gpioc::PC2<Uninitialized>, // TODO: find out which pins these should be
-    tx_boost: gpioc::PC1<Uninitialized>, // And what their function is
-    tcxo_en_pin: Option<gpioa::PA8<Uninitialized>>,
     gpioa_crl: &mut gpioa::CRL,
     gpiob_crl: &mut gpiob::CRL,
     gpiob_crh: &mut gpiob::CRH,
     mapr: &mut hal::afio::MAPR,
     clocks: hal::rcc::Clocks,
 ) -> BoardBindings {
-    let mut set_board_tcxo = None;
-
     let spi_pins = (
-        spi_sck,  // D13
-        spi_miso, // D12
-        spi_mosi, // D11
+        spi_sck.into_alternate_push_pull(gpioa_crl),  // D13
+        spi_miso.into_floating_input(gpioa_crl),      // D12
+        spi_mosi.into_alternate_push_pull(gpioa_crl), // D11
     );
 
     let spi_mode = SpiMode {
@@ -55,19 +48,18 @@ pub fn new(
     // this is necessary as the extern C functions need access
     // this is safe, thanks to ownership and because these statics are private
     unsafe {
-        let spi1 = Spi::spi1(spi_peripheral, spi_pins, mapr, spi_mode, 100.khz(), clocks, &mut rcc.apb2);
+        let spi1 = Spi::spi1(
+            spi_peripheral,
+            spi_pins,
+            mapr,
+            spi_mode,
+            100.khz(),
+            clocks,
+            &mut rcc.apb2,
+        );
         SPI = Some(spi1);
-        SPI_NSS = Some(spi_nss_pin.into_push_pull_output(gpiob_crh));
+        SPI_NSS = Some(spi_nss_pin.into_push_pull_output(gpiob_crl));
         RESET = Some(reset.into_push_pull_output(gpiob_crl));
-        ANT_SW = Some(AntennaSwitches::new(
-            rx.into_push_pull_output(gpioa_crl),
-            tx_rfo.into_push_pull_output(),
-            tx_boost.into_push_pull_output(),
-        ));
-        if let Some(tcxo_en) = tcxo_en_pin {
-            EN_TCXO = Some(tcxo_en.into_push_pull_output());
-            set_board_tcxo = Some(set_tcxo as unsafe extern "C" fn(bool) -> u8);
-        }
     };
 
     BoardBindings {
@@ -76,7 +68,7 @@ pub fn new(
         spi_nss: Some(spi_nss),
         delay_ms: Some(delay_ms),
         set_antenna_pins: Some(set_antenna_pins),
-        set_board_tcxo,
+        set_board_tcxo: None,
         busy_pin_status: None,
         reduce_power: None,
     }
@@ -98,15 +90,16 @@ pub extern "C" fn set_tcxo(value: bool) -> u8 {
     6
 }
 
-// type SpiPort = hal::spi::Spi<
-//     hal::pac::SPI1,
-//     (
-//         hal::gpio::gpiob::PB3<Uninitialized>,
-//         hal::gpio::gpioa::PA6<Uninitialized>,
-//         hal::gpio::gpioa::PA7<Uninitialized>,
-//     ),
-// >;
-static mut SPI: Option<x> = None;
+type SpiPort = hal::spi::Spi<
+    pac::SPI1,
+    Spi1NoRemap,
+    (
+        gpioa::PA5<Alternate<PushPull>>,
+        gpioa::PA6<Input<Floating>>,
+        gpioa::PA7<Alternate<PushPull>>,
+    ),
+>;
+static mut SPI: Option<SpiPort> = None;
 #[no_mangle]
 extern "C" fn spi_in_out(out_data: u8) -> u8 {
     unsafe {
@@ -152,68 +145,6 @@ extern "C" fn delay_ms(ms: u32) {
     cortex_m::asm::delay(ms);
 }
 
-pub struct AntennaSwitches<Rx, TxRfo, TxBoost> {
-    rx: Rx,
-    tx_rfo: TxRfo,
-    tx_boost: TxBoost,
-}
-#[warn(unused_must_use)]
-impl<Rx, TxRfo, TxBoost> AntennaSwitches<Rx, TxRfo, TxBoost>
-where
-    Rx: embedded_hal::digital::v2::OutputPin,
-    TxRfo: embedded_hal::digital::v2::OutputPin,
-    TxBoost: embedded_hal::digital::v2::OutputPin,
-{
-    pub fn new(rx: Rx, tx_rfo: TxRfo, tx_boost: TxBoost) -> AntennaSwitches<Rx, TxRfo, TxBoost> {
-        AntennaSwitches {
-            rx,
-            tx_rfo,
-            tx_boost,
-        }
-    }
-
-    pub fn set_sleep(&mut self) {
-        self.rx.set_low().unwrap_or(());
-        self.tx_rfo.set_low().unwrap_or(());
-        self.tx_boost.set_low().unwrap_or(());
-    }
-
-    pub fn set_tx(&mut self) {
-        self.rx.set_low().unwrap_or(());
-        self.tx_rfo.set_low().unwrap_or(());
-        self.tx_boost.set_high().unwrap_or(());
-    }
-
-    pub fn set_rx(&mut self) {
-        self.rx.set_high().unwrap_or(());
-        self.tx_rfo.set_low().unwrap_or(());
-        self.tx_boost.set_low().unwrap_or(());
-    }
-}
-
-type AntSw = AntennaSwitches<
-    stm32f1xx_hal::gpio::gpioa::PA1<stm32f1xx_hal::gpio::Output<stm32f1xx_hal::gpio::PushPull>>,
-    stm32f1xx_hal::gpio::gpioc::PC2<stm32f1xx_hal::gpio::Output<stm32f1xx_hal::gpio::PushPull>>,
-    stm32f1xx_hal::gpio::gpioc::PC1<stm32f1xx_hal::gpio::Output<stm32f1xx_hal::gpio::PushPull>>,
->;
-
-static mut ANT_SW: Option<AntSw> = None;
-
 pub extern "C" fn set_antenna_pins(mode: AntPinsMode, _power: u8) {
-    unsafe {
-        if let Some(ant_sw) = &mut ANT_SW {
-            match mode {
-                AntPinsMode::AntModeTx => {
-                    ant_sw.set_tx();
-                }
-                AntPinsMode::AntModeRx => {
-                    ant_sw.set_rx();
-                }
-                AntPinsMode::AntModeSleep => {
-                    ant_sw.set_sleep();
-                }
-                _ => (),
-            }
-        }
-    }
+    // TODO: Do we need this declaration if there are no antenna pins?
 }

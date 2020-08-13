@@ -1,19 +1,20 @@
 #![cfg_attr(not(test), no_std)]
 #![no_main]
-#![no_std]
 
 // To use example, press any key in serial terminal
 // Packet will send and "Transmit Done!" will print when radio is done sending packet
 
-extern crate nb;
-extern crate panic_halt;
 
 use core::fmt::Write;
+use hal::device::USART2 as DebugUsart;
+use hal::{pac, pac::Interrupt, serial};
+use hal::{
+    prelude::*,
+    timer::{CountDownTimer, Timer},
+};
 use lorawan_device::{Device as LoRaWanDevice, Event as LoRaWanEvent, Response as LoRaWanResponse};
 use rtic::app;
-use stm32f1xx_hal::device::USART1 as DebugUsart;
-use stm32f1xx_hal::{pac, pac::Interrupt, serial};
-use stm32f1xx_hal::{prelude::*, rcc, timer::Timer};
+use stm32f1xx_hal as hal;
 use sx12xx;
 use sx12xx::Sx12xx;
 mod bindings;
@@ -21,7 +22,8 @@ pub use bindings::initialize_irq as initialize_radio_irq;
 pub use bindings::RadioIRQ;
 pub use bindings::TcxoEn;
 
-static mut RNG: Option<()> = todo!("init rng");
+//TODO: determine RNG type
+static mut RNG: Option<()> = None;
 fn get_random_u32() -> u32 {
     todo!()
 }
@@ -35,11 +37,9 @@ pub struct TimerContext {
 #[app(device = stm32f1xx_hal::pac, peripherals = true)]
 const APP: () = {
     struct Resources {
-        int: Exti,
-        radio_irq: RadioIRQ,
         debug_uart: serial::Tx<DebugUsart>,
         uart_rx: serial::Rx<DebugUsart>,
-        timer: Timer<pac::TIM2>,
+        timer: CountDownTimer<pac::TIM2>,
         #[init([0;512])]
         buffer: [u8; 512],
         #[init(0)]
@@ -66,15 +66,14 @@ const APP: () = {
 
         let mut gpioa = device.GPIOA.split(&mut rcc.apb2);
         let mut gpiob = device.GPIOB.split(&mut rcc.apb2);
-        let mut gpioc = device.GPIOB.split(&mut rcc.apb2);
 
         let usart2_rx = gpioa.pa2.into_alternate_push_pull(&mut gpioa.crl);
         let usart2_tx = gpioa.pa3.into_floating_input(&mut gpioa.crl);
         let serial_pins = (usart2_rx, usart2_tx);
 
-        let usart2_config = stm32f1xx_hal::serial::Config::default();
+        let usart2_config = hal::serial::Config::default();
 
-        let mut serial = stm32f1xx_hal::serial::Serial::usart2(
+        let mut serial = hal::serial::Serial::usart2(
             device.USART2,
             serial_pins,
             &mut afio.mapr,
@@ -89,29 +88,26 @@ const APP: () = {
 
         write!(tx, "LongFi Device Test\r\n").unwrap();
 
-        let mut exti = todo!();
-
         // constructor initializes 48 MHz clock that RNG requires
         // Initialize 48 MHz clock and RNG
-        
-        unsafe { RNG = Some(todo!()) };
-        let radio_irq = initialize_radio_irq(gpiob.pb4, &mut syscfg, &mut exti);
+
+        // unsafe { RNG = Some(todo!("Init RNG")) };
 
         // Configure the timer.
-        let timer = device.TIM2.timer(1.khz(), &mut rcc);
+        let timer = Timer::tim2(device.TIM2, &clocks, &mut rcc.apb1).start_count_down(100.khz());
 
         let bindings = bindings::new(
             device.SPI1,
-            &mut rcc,
-            gpiob.pb3,
+            &mut rcc.apb2,
+            gpioa.pa5,
             gpioa.pa6,
             gpioa.pa7,
-            gpioa.pa15,
-            gpioc.pc0,
-            gpioa.pa1,
-            gpioc.pc2,
-            gpioc.pc1,
-            None, //Some(gpioa.pa8), //use pa8 for catena
+            gpiob.pb0,
+            gpiob.pb1,
+            &mut gpioa.crl,
+            &mut gpiob.crl,
+            &mut afio.mapr,
+            clocks,
         );
 
         let mut sx12xx = Sx12xx::new(sx12xx::Radio::sx1276(), bindings);
@@ -133,8 +129,6 @@ const APP: () = {
 
         // Return the initialised resources.
         init::LateResources {
-            int: exti,
-            radio_irq,
             debug_uart: tx,
             uart_rx: rx,
             sx12xx,
@@ -214,8 +208,8 @@ const APP: () = {
     }
 
     /// This task runs on rising edge of DIO0 IRQ line,
-    #[task(binds = EXTI4_15, priority = 1, resources = [radio_irq, int], spawn = [radio_event])]
-    fn EXTI4_15(ctx: EXTI4_15::Context) {
+    #[task(binds = EXTI15_10, priority = 1, spawn = [radio_event])]
+    fn EXTI15_10(ctx: EXTI15_10::Context) {
         todo!("unpend interrupt");
 
         ctx.spawn
@@ -227,9 +221,11 @@ const APP: () = {
     // but we can switch to RTFM timer queues later maybe
     #[task(binds = TIM2, resources = [timer, timer_context], spawn = [lorawan_event])]
     fn TIM2(mut ctx: TIM2::Context) {
+        use hal::timer::Event::Update;
+
         let timer = ctx.resources.timer;
         let spawn = ctx.spawn;
-        timer.clear_irq();
+        timer.clear_update_interrupt_flag();
 
         ctx.resources.timer_context.lock(|context| {
             // if timer has been disabled,
@@ -237,18 +233,18 @@ const APP: () = {
             if !context.enable {
                 context.target = 0;
                 context.count = 0;
-                timer.unlisten();
+                timer.unlisten(Update);
             } else {
                 // if count is 0, we are just setting up a timeout
                 if context.count == 0 {
                     timer.reset();
-                    timer.listen();
+                    timer.listen(Update);
                 }
                 context.count += 1;
 
                 // if we have a match, timer has fired
                 if context.count == context.target {
-                    timer.unlisten();
+                    timer.unlisten(Update);
                     context.count = 0;
                     context.enable = false;
                     spawn.lorawan_event(LoRaWanEvent::TimerFired).unwrap()
@@ -259,6 +255,6 @@ const APP: () = {
 
     // Interrupt handlers used to dispatch software tasks
     extern "C" {
-        fn USART4_USART5();
+        fn USART3(); // TODO: verify that this should indeed be USAR
     }
 };

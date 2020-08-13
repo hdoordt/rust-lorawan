@@ -2,34 +2,33 @@ use embedded_hal::digital::v2::OutputPin;
 use hal::gpio::*;
 use hal::pac;
 use hal::prelude::*;
-use hal::rcc::Rcc;
+use hal::rcc::APB2;
 use hal::spi::{Mode as SpiMode, Phase, Polarity, Spi, Spi1NoRemap};
 
 use nb::block;
 use stm32f1xx_hal as hal;
 use sx12xx::{AntPinsMode, BoardBindings};
 
-type Uninitialized = Analog;
+type Uninitialized = Input<Floating>;
 
 pub type RadioIRQ = gpiob::PB4<Input<PullUp>>;
 
 pub fn initialize_irq() {
-    todo!("Configure interrupt on dio0_pin's rising edge");
+    todo!("Configure interrupt on dio0_pin's rising edge (EXTI15_10)");
 }
 
 pub type TcxoEn = gpioa::PA8<Output<PushPull>>;
 
 pub fn new(
     spi_peripheral: pac::SPI1,
-    rcc: &mut Rcc,
+    rcc_apb2: &mut APB2,
     spi_sck: gpioa::PA5<Uninitialized>,
     spi_miso: gpioa::PA6<Uninitialized>,
     spi_mosi: gpioa::PA7<Uninitialized>,
-    spi_nss_pin: gpiob::PB1<Uninitialized>,
+    spi_nss_pin: gpiob::PB0<Uninitialized>,
     reset: gpiob::PB1<Uninitialized>,
     gpioa_crl: &mut gpioa::CRL,
     gpiob_crl: &mut gpiob::CRL,
-    gpiob_crh: &mut gpiob::CRH,
     mapr: &mut hal::afio::MAPR,
     clocks: hal::rcc::Clocks,
 ) -> BoardBindings {
@@ -54,8 +53,7 @@ pub fn new(
             mapr,
             spi_mode,
             100.khz(),
-            clocks,
-            &mut rcc.apb2,
+            clocks,rcc_apb2,
         );
         SPI = Some(spi1);
         SPI_NSS = Some(spi_nss_pin.into_push_pull_output(gpiob_crl));
@@ -112,7 +110,7 @@ extern "C" fn spi_in_out(out_data: u8) -> u8 {
     }
 }
 
-static mut SPI_NSS: Option<gpiob::PB1<Output<PushPull>>> = None;
+static mut SPI_NSS: Option<gpiob::PB0<Output<PushPull>>> = None;
 #[no_mangle]
 extern "C" fn spi_nss(value: bool) {
     unsafe {

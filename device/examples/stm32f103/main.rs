@@ -87,9 +87,9 @@ const APP: () = {
         let mut gpioa = device.GPIOA.split(&mut rcc.apb2);
         let mut gpiob = device.GPIOB.split(&mut rcc.apb2);
 
-        let usart1_rx = gpioa.pa9.into_alternate_push_pull(&mut gpioa.crh);
-        let usart1_tx = gpioa.pa10.into_floating_input(&mut gpioa.crh);
-        let serial_pins = (usart1_rx, usart1_tx);
+        let usart1_tx = gpioa.pa9.into_alternate_push_pull(&mut gpioa.crh);
+        let usart1_rx = gpioa.pa10.into_floating_input(&mut gpioa.crh);
+        let serial_pins = (usart1_tx, usart1_rx);
 
         let usart1_config = serial::Config::default();
 

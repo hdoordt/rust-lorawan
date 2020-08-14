@@ -13,7 +13,12 @@ type Uninitialized = Input<Floating>;
 
 pub type RadioIRQ = gpioa::PA3<Input<Floating>>;
 
-pub fn initialize_irq(dio0_pin: RadioIRQ, gpioa_crl: &mut gpioa::CRL, afio: &mut hal::afio::Parts, exti: &pac::EXTI) -> RadioIRQ {
+pub fn initialize_irq(
+    dio0_pin: RadioIRQ,
+    gpioa_crl: &mut gpioa::CRL,
+    afio: &mut hal::afio::Parts,
+    exti: &pac::EXTI,
+) -> RadioIRQ {
     let mut dio0_pin = dio0_pin.into_floating_input(gpioa_crl);
     dio0_pin.make_interrupt_source(afio);
     dio0_pin.trigger_on_edge(exti, Edge::RISING);
@@ -61,11 +66,13 @@ pub fn new(
             mapr,
             spi_mode,
             100.khz(),
-            clocks,rcc_apb2,
+            clocks,
+            rcc_apb2,
         );
         SPI = Some(spi1);
-        SPI_NSS = Some(spi_nss_pin.into_push_pull_output(gpiob_crl));
-        RESET = Some(reset.into_push_pull_output(gpiob_crl));
+        SPI_NSS =
+            Some(spi_nss_pin.into_push_pull_output_with_state(gpiob_crl, State::High));
+        RESET = Some(reset.into_push_pull_output_with_state(gpiob_crl, State::High));
     };
 
     BoardBindings {
@@ -150,4 +157,3 @@ extern "C" fn radio_reset(value: bool) {
 extern "C" fn delay_ms(ms: u32) {
     cortex_m::asm::delay(ms);
 }
-

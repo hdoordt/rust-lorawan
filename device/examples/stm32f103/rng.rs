@@ -31,11 +31,14 @@ impl Rng {
         self.crc.write(self.rtc.current_time());
 
         for _ in 0..8 {
-            let adc1 = self.adc.read(&mut self.adc_pin).unwrap_or(0u32);
-            let adc2 = self.adc.read(&mut self.adc_pin).unwrap_or(0u32);
-            self.crc.write(adc1 | (adc2 << 16));
+            let val = self.read_adc() | (self.read_adc() << 16);
+            self.crc.write(val);
         }
 
         self.crc.read()
+    }
+
+    fn read_adc(&mut self) -> u32 {
+        self.adc.read(&mut self.adc_pin).unwrap_or(0u32)
     }
 }

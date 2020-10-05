@@ -5,7 +5,8 @@ members = [
 ]
 
 [profile.dev]
-opt-level = "s"
+opt-level = 1
+debug = true
 
 [profile.release]
 debug = true

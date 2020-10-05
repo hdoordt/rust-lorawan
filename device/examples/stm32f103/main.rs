@@ -4,7 +4,7 @@
 // To use example, press any key in serial terminal
 // Packet will send and "Transmit Done!" will print when radio is done sending packet
 
-use panic_halt as _;
+use panic_semihosting as _;
 
 use core::fmt::Write;
 use hal::device::USART1 as DebugUsart;
@@ -20,6 +20,8 @@ use rtic::app;
 use stm32f1xx_hal as hal;
 use sx12xx;
 use sx12xx::Sx12xx;
+
+use cortex_m_rt::{exception, ExceptionFrame};
 
 mod bindings;
 mod rng;
@@ -62,6 +64,7 @@ const APP: () = {
             enable: false,
         })]
         timer_context: TimerContext,
+        led_pin: gpioc::PC13<Output<PushPull>>,
     }
 
     #[init(spawn = [send_ping, lorawan_event], resources = [buffer])]
@@ -86,6 +89,11 @@ const APP: () = {
 
         let mut gpioa = device.GPIOA.split(&mut rcc.apb2);
         let mut gpiob = device.GPIOB.split(&mut rcc.apb2);
+        let mut gpioc = device.GPIOC.split(&mut rcc.apb2);
+
+        let led_pin = gpioc
+            .pc13
+            .into_push_pull_output_with_state(&mut gpioc.crh, State::High);
 
         let usart1_tx = gpioa.pa9.into_alternate_push_pull(&mut gpioa.crh);
         let usart1_rx = gpioa.pa10.into_floating_input(&mut gpioa.crh);
@@ -106,7 +114,7 @@ const APP: () = {
         serial.listen(serial::Event::Rxne);
         let (mut tx, rx) = serial.split();
 
-        write!(tx, "LongFi Device Test\r\n").unwrap();
+        write!(tx, "===== LongFi Device Test =======\r\n").unwrap();
 
         // constructor initializes 48 MHz clock that RNG requires
         // Initialize 48 MHz clock and RNG
@@ -133,17 +141,15 @@ const APP: () = {
             &mut afio.mapr,
             clocks,
         );
+        let radio = sx12xx::Radio::sx1276();
 
-        let mut sx12xx = Sx12xx::new(sx12xx::Radio::sx1276(), bindings);
+        let mut sx12xx = Sx12xx::new(radio, bindings);
         sx12xx.set_public_network(true);
 
         let lorawan = LoRaWanDevice::new(
-            [0x83, 0x19, 0x20, 0xB5, 0x5C, 0x1E, 0x16, 0x7C],
-            [0x11, 0x6B, 0x8A, 0x61, 0x3E, 0x37, 0xA1, 0x0C],
-            [
-                0xAC, 0xC3, 0x87, 0x2A, 0x2F, 0x82, 0xED, 0x20, 0x47, 0xED, 0x18, 0x92, 0xD6, 0xFC,
-                0x8C, 0x0E,
-            ],
+            0x00_u64.to_be_bytes(),
+            0x00_u64.to_be_bytes(),
+            0x00_u128.to_be_bytes(),
             get_random_u32,
         );
 
@@ -159,6 +165,7 @@ const APP: () = {
             lorawan,
             timer,
             radio_irq,
+            led_pin,
         }
     }
 
@@ -211,22 +218,26 @@ const APP: () = {
         }
     }
 
-    #[task(capacity = 4, priority = 2, resources = [debug_uart, count, sx12xx, lorawan])]
+    #[task(capacity = 4, priority = 2, resources = [debug_uart, count, sx12xx, lorawan, led_pin])]
     fn send_ping(ctx: send_ping::Context) {
+        use embedded_hal::digital::v2::OutputPin;
+
         let (sx12xx, lorawan) = (ctx.resources.sx12xx, ctx.resources.lorawan);
         let debug = ctx.resources.debug_uart;
+        let led_pin = ctx.resources.led_pin;
+
+        led_pin.set_low();
         write!(debug, "Sending Ping\r\n").unwrap();
 
         let data: [u8; 5] = [0xDE, 0xAD, 0xBE, 0xEF, *ctx.resources.count];
         *ctx.resources.count += 1;
 
-        lorawan.send(sx12xx, &data, 1, false);
+        lorawan.send(sx12xx, &data, 1, true);
+        led_pin.set_high();
     }
 
-    #[task(binds = USART2, priority=1, resources = [uart_rx], spawn = [send_ping])]
-    fn USART2(ctx: USART2::Context) {
-        // #[task(binds = USART1, priority=1, resources = [uart_rx], spawn = [send_ping])]
-        // fn USART1(ctx: USART1::Context) {
+    #[task(binds = USART1, priority=1, resources = [uart_rx], spawn = [send_ping])]
+    fn USART1(ctx: USART1::Context) {
         let rx = ctx.resources.uart_rx;
         rx.read().unwrap();
         ctx.spawn.send_ping().unwrap();

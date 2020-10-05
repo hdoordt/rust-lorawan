@@ -32,11 +32,12 @@ impl Configuration {
     }
 
     pub fn get_join_frequency(&mut self, random: u8) -> u32 {
-        let subband = if let Some(subband) = &self.subband {
-            subband - 1
-        } else {
-            (random >> 3) & 0b111
-        };
+        // let subband = if let Some(subband) = &self.subband {
+        //     subband - 1
+        // } else {
+        //     (random >> 3) & 0b111
+        // };
+        let subband = 0;
         self.last_join = subband;
         UPLINK_CHANNEL_MAP[subband as usize]
     }

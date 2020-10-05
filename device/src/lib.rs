@@ -126,6 +126,8 @@ impl<R: Radio, E> Device<R, E> {
                 }
                 Err(_output) => {}
             }
+        } else {
+            panic!("No session available")
         }
     }
 

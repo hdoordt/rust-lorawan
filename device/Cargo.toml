@@ -20,7 +20,7 @@ generic-array = "0.13.2"
 
 [dev-dependencies]
 cortex-m = {version = "0.6.0", features = ["const-fn"] }
-cortex-m-rt = "0.6.7"
+cortex-m-rt = {version= "0.6.12", features = ["device"] }
 cortex-m-semihosting = "0.3.2"
 cortex-m-rtic = "0.5.3"
 void = { version = "1.0.2", default-features = false }

@@ -87,22 +87,6 @@ pub fn new(
     }
 }
 
-static mut EN_TCXO: Option<TcxoEn> = None;
-
-#[no_mangle]
-pub extern "C" fn set_tcxo(value: bool) -> u8 {
-    unsafe {
-        if let Some(pin) = &mut EN_TCXO {
-            if value {
-                pin.set_high().unwrap();
-            } else {
-                pin.set_low().unwrap();
-            }
-        }
-    }
-    6
-}
-
 type SpiPort = hal::spi::Spi<
     pac::SPI1,
     Spi1NoRemap,
